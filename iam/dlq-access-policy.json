@@ -1,0 +1,6 @@
+{"Version":"2012-10-17","Statement":[
+ {"Sid":"OwnerAccess","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::<ACCOUNT_ID>:root"},"Action":"sqs:*",
+  "Resource":"arn:aws:sqs:us-east-2:<ACCOUNT_ID>:brewline-dlq"},
+ {"Sid":"AllowBrewlineRules","Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sqs:SendMessage",
+  "Resource":"arn:aws:sqs:us-east-2:<ACCOUNT_ID>:brewline-dlq",
+  "Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:events:us-east-2:<ACCOUNT_ID>:rule/brewline-bus/*"}}}]}

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brewline Barista</title>
+<style>
+  :root { --bg:#f4f1ec; --card:#fff; --ink:#2b2118; --muted:#7a6a5c; --accent:#8a5a2b; --ok:#2f7d4a; --bad:#b3392f; --line:#e8e0d6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px; border-bottom:1px solid var(--line); background:#fff; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:22px; }
+  .who { color:var(--muted); font-size:14px; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  button { font:inherit; padding:8px 14px; border-radius:8px; border:none; background:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+  .tabs button { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  .tabs button.active { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .order { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+  .order .name { font-weight:700; font-size:18px; }
+  .order .items { color:var(--muted); font-size:14px; margin-top:4px; }
+  .order .time { color:var(--muted); font-size:12px; margin-top:4px; }
+  .center { text-align:center; padding:48px 16px; }
+  .muted { color:var(--muted); }
+  .error { color:var(--bad); margin:8px 0; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>☕ Brewline · Barista</h1>
+  <div>
+    <span id="who" class="who"></span>
+    <button id="logout-btn" class="secondary hidden">Log out</button>
+  </div>
+</header>
+
+<main>
+  <!-- Shown when not logged in -->
+  <section id="login-view" class="center hidden">
+    <h2>Staff only</h2>
+    <p class="muted">Log in with your Brewline staff account.</p>
+    <button id="login-btn">Log in</button>
+  </section>
+
+  <!-- Shown when logged in -->
+  <section id="queue-view" class="hidden">
+    <div class="tabs">
+      <button data-status="ACCEPTED" class="active">New (Accepted)</button>
+      <button data-status="PREPARING">Preparing</button>
+      <button data-status="READY">Ready for pickup</button>
+    </div>
+    <div id="error" class="error"></div>
+    <div id="orders"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+
+<script>
+// ===== Settings (from Cognito + API Gateway) =====
+const COGNITO_DOMAIN = "https://YOUR_COGNITO_DOMAIN.auth.us-east-2.amazoncognito.com";
+const CLIENT_ID      = "YOUR_APP_CLIENT_ID";
+const REDIRECT_URI   = "https://YOUR_DISTRIBUTION.cloudfront.net/barista.html";
+const API            = "https://YOUR_API_ID.execute-api.us-east-2.amazonaws.com";
+
+const el = id => document.getElementById(id);
+const NEXT_ACTION = {               // the state machine, from the barista's view
+  ACCEPTED:  { action: "START",     label: "Start making" },
+  PREPARING: { action: "READY",     label: "Mark ready" },
+  READY:     { action: "PICKED_UP", label: "Picked up" }
+};
+let currentStatus = "ACCEPTED";
+let refreshTimer = null;
+
+// ===== Small helpers for PKCE (proof that WE started the login) =====
+function randomString(len = 64) {
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  return Array.from(bytes, b => ("0" + (b % 36).toString(36)).slice(-1)).join("");
+}
+function base64url(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function sha256(text) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+}
+function decodeJwt(token) {        // read (not verify) the token's payload
+  const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  return JSON.parse(atob(part));
+}
+
+// ===== Login: send the barista to Cognito's Managed Login page =====
+async function login() {
+  const verifier = randomString(64);     // our secret, never leaves this browser
+  const state = randomString(24);        // protects against forged redirects
+  sessionStorage.setItem("pkce_verifier", verifier);
+  sessionStorage.setItem("oauth_state", state);
+
+  const challenge = base64url(await sha256(verifier));
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    scope: "openid email profile",
+    code_challenge_method: "S256",
+    code_challenge: challenge,
+    state
+  });
+  location.href = `${COGNITO_DOMAIN}/oauth2/authorize?${params}`;
+}
+
+// ===== Back from Cognito: swap the one-time code for tokens =====
+async function handleRedirect() {
+  const url = new URL(location.href);
+  const code = url.searchParams.get("code");
+  if (!code) return;
+
+  // Remove ?code=... from the address bar right away.
+  history.replaceState({}, "", REDIRECT_URI);
+
+  if (url.searchParams.get("state") !== sessionStorage.getItem("oauth_state")) {
+    throw new Error("Login check failed (state mismatch). Please log in again.");
+  }
+  const res = await fetch(`${COGNITO_DOMAIN}/oauth2/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: CLIENT_ID,
+      code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: sessionStorage.getItem("pkce_verifier")
+    })
+  });
+  if (!res.ok) throw new Error("Could not finish login. Please try again.");
+  const tokens = await res.json();
+
+  sessionStorage.removeItem("pkce_verifier");
+  sessionStorage.removeItem("oauth_state");
+  sessionStorage.setItem("access_token", tokens.access_token);
+  sessionStorage.setItem("id_token", tokens.id_token);
+}
+
+function getAccessToken() {
+  const token = sessionStorage.getItem("access_token");
+  if (!token) return null;
+  try {
+    if (decodeJwt(token).exp * 1000 < Date.now()) { clearSession(); return null; } // expired
+  } catch (e) { clearSession(); return null; }
+  return token;
+}
+
+function clearSession() {
+  ["access_token", "id_token"].forEach(k => sessionStorage.removeItem(k));
+}
+
+function logout() {
+  clearSession();
+  const params = new URLSearchParams({ client_id: CLIENT_ID, logout_uri: REDIRECT_URI });
+  location.href = `${COGNITO_DOMAIN}/logout?${params}`;
+}
+
+// ===== Calls to OUR API, always with the token =====
+async function api(path, options = {}) {
+  const token = getAccessToken();
+  if (!token) { showLogin(); throw new Error("Please log in."); }
+  const res = await fetch(API + path, {
+    ...options,
+    headers: { ...(options.headers || {}), "Authorization": `Bearer ${token}` }
+  });
+  if (res.status === 401) {           // token rejected by API Gateway
+    clearSession(); showLogin();
+    throw new Error("Session expired. Please log in again.");
+  }
+  const data = await res.json();
+  if (!res.ok) throw new Error((data.error && data.error.message) || `Error ${res.status}`);
+  return data;
+}
+
+// ===== The queue =====
+async function loadQueue() {
+  el("error").textContent = "";
+  try {
+    const data = await api(`/barista/orders?status=${currentStatus}`);
+    renderOrders(data.orders);
+  } catch (e) {
+    el("error").textContent = e.message;
+  }
+}
+
+function renderOrders(orders) {
+  const box = el("orders");
+  box.innerHTML = "";
+  if (!orders.length) {
+    box.innerHTML = '<p class="muted center">No orders here right now.</p>';
+    return;
+  }
+  for (const o of orders) {
+    const card = document.createElement("div");
+    card.className = "order";
+
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = o.pickupName;
+    const items = document.createElement("div");
+    items.className = "items";
+    items.textContent = o.items.map(l =>
+      `${l.qty} × ${l.name}${l.size === "REG" ? "" : " (" + l.size.toLowerCase() + ")"}`).join(", ");
+    const time = document.createElement("div");
+    time.className = "time";
+    time.textContent = `${o.orderId} · ordered ${new Date(o.createdAt).toLocaleString()}`;
+    info.append(name, items, time);
+
+    const next = NEXT_ACTION[o.status];
+    const btn = document.createElement("button");
+    btn.textContent = next.label;
+    btn.onclick = () => moveOrder(o.orderId, next.action, btn);
+
+    card.append(info, btn);
+    box.appendChild(card);
+  }
+}
+
+async function moveOrder(orderId, action, btn) {
+  btn.disabled = true;
+  el("error").textContent = "";
+  try {
+    await api(`/barista/orders/${encodeURIComponent(orderId)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    });
+    loadQueue();
+  } catch (e) {
+    el("error").textContent = e.message;   // e.g. INVALID_TRANSITION message
+    btn.disabled = false;
+  }
+}
+
+// ===== Screens =====
+function showLogin() {
+  clearInterval(refreshTimer);
+  el("login-view").classList.remove("hidden");
+  el("queue-view").classList.add("hidden");
+  el("logout-btn").classList.add("hidden");
+  el("who").textContent = "";
+}
+
+function showQueue() {
+  el("login-view").classList.add("hidden");
+  el("queue-view").classList.remove("hidden");
+  el("logout-btn").classList.remove("hidden");
+  const idToken = sessionStorage.getItem("id_token");
+  if (idToken) el("who").textContent = decodeJwt(idToken).email || "";
+  loadQueue();
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(loadQueue, 10000);   // refresh every 10 s
+}
+
+document.querySelectorAll(".tabs button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    currentStatus = b.dataset.status;
+    loadQueue();
+  };
+});
+el("login-btn").onclick = login;
+el("logout-btn").onclick = logout;
+
+// ===== Start =====
+(async () => {
+  try {
+    await handleRedirect();
+  } catch (e) {
+    showLogin();
+    el("login-view").insertAdjacentHTML("beforeend", `<p class="error"></p>`);
+    el("login-view").querySelector(".error").textContent = e.message;
+    return;
+  }
+  getAccessToken() ? showQueue() : showLogin();
+})();
+</script>
+</body>
+</html>

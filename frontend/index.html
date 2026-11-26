@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brewline</title>
+<style>
+  :root { --bg:#faf7f2; --card:#fff; --ink:#2b2118; --muted:#7a6a5c; --accent:#8a5a2b; --ok:#2f7d4a; --bad:#b3392f; --line:#e8e0d6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:20px 16px; text-align:center; }
+  header h1 { margin:0; font-size:28px; }
+  header p { margin:4px 0 0; color:var(--muted); }
+  main { max-width:720px; margin:0 auto; padding:0 16px 40px; display:grid; gap:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h2 { margin:0 0 12px; font-size:18px; }
+  h3 { margin:16px 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .item { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .item:first-of-type { border-top:none; }
+  .item .name { font-weight:600; }
+  .item .controls { display:flex; gap:6px; align-items:center; }
+  select, input, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+  button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.link { background:none; color:var(--accent); padding:0 4px; }
+  .soldout { color:var(--muted); font-size:14px; }
+  .row { display:flex; justify-content:space-between; padding:4px 0; }
+  .total { font-weight:700; border-top:1px solid var(--line); margin-top:8px; padding-top:8px; }
+  .checkout { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .checkout input { flex:1; min-width:160px; }
+  .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-weight:700; font-size:14px; background:var(--line); }
+  .ACCEPTED,.READY,.PICKED_UP { background:#dff1e5; color:var(--ok); }
+  .REJECTED,.ABANDONED { background:#f7dedb; color:var(--bad); }
+  .muted { color:var(--muted); font-size:14px; }
+  .error { color:var(--bad); font-size:14px; margin-top:8px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>☕ Brewline</h1>
+  <p>Order ahead, skip the line.</p>
+</header>
+
+<main>
+  <section id="menu-section">
+    <h2>Menu</h2>
+    <div id="menu"><p class="muted">Loading menu…</p></div>
+  </section>
+
+  <section id="cart-section">
+    <h2>Your order</h2>
+    <div id="cart"><p class="muted">Nothing yet. Add something from the menu.</p></div>
+    <div class="checkout">
+      <input id="pickup-name" maxlength="30" placeholder="Name for pickup">
+      <button id="place-btn" disabled>Place order</button>
+    </div>
+    <div id="order-error" class="error"></div>
+  </section>
+
+  <section id="status-section" class="hidden">
+    <h2>Order status</h2>
+    <p><span id="status-badge" class="badge">…</span></p>
+    <p id="status-text" class="muted"></p>
+    <div id="status-items"></div>
+    <p class="muted">Order <span id="status-id"></span> · <button class="link" id="new-order-btn">Start a new order</button></p>
+  </section>
+</main>
+
+<script>
+// ← Your API Gateway URL (no trailing slash)
+const API = "https://YOUR_API_ID.execute-api.us-east-2.amazonaws.com";
+
+const money = c => "$" + (c / 100).toFixed(2);
+const el = id => document.getElementById(id);
+
+let menu = [];
+let cart = [];              // [{itemId, name, size, qty, unitCents}]
+let idempotencyKey = null;  // one key per checkout attempt, reused on retry
+let pollTimer = null;
+
+const STATUS_TEXT = {
+  PLACED: "Order received. Checking stock…",
+  ACCEPTED: "Accepted! Your barista will start soon.",
+  REJECTED: "Sorry, we couldn't make this order.",
+  PREPARING: "Your barista is making it now.",
+  READY: "Ready for pickup!",
+  PICKED_UP: "Picked up. Enjoy!",
+  ABANDONED: "This order was not picked up in time."
+};
+const FINAL = ["REJECTED", "PICKED_UP", "ABANDONED"];
+
+// ---------- Menu ----------
+async function loadMenu() {
+  try {
+    const res = await fetch(API + "/menu");
+    if (!res.ok) throw new Error(res.status);
+    menu = (await res.json()).items;
+    renderMenu();
+  } catch (e) {
+    el("menu").innerHTML = '<p class="error">Could not load the menu.</p>';
+  }
+}
+
+function renderMenu() {
+  const box = el("menu");
+  box.innerHTML = "";
+  let lastCategory = null;
+  for (const item of menu) {
+    if (item.category !== lastCategory) {
+      const h = document.createElement("h3");
+      h.textContent = item.category === "FOOD" ? "Food" : "Coffee";
+      box.appendChild(h);
+      lastCategory = item.category;
+    }
+    const row = document.createElement("div");
+    row.className = "item";
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = item.name;
+    row.appendChild(name);
+
+    const controls = document.createElement("span");
+    controls.className = "controls";
+    if (item.soldOut) {
+      controls.innerHTML = '<span class="soldout">Sold out</span>';
+    } else {
+      const select = document.createElement("select");
+      for (const [size, cents] of Object.entries(item.sizes).sort((a, b) => a[1] - b[1])) {
+        const opt = document.createElement("option");
+        opt.value = size;
+        opt.textContent = (size === "REG" ? "" : size[0] + size.slice(1).toLowerCase() + " · ") + money(cents);
+        select.appendChild(opt);
+      }
+      const add = document.createElement("button");
+      add.textContent = "Add";
+      add.onclick = () => addToCart(item, select.value);
+      controls.append(select, add);
+    }
+    row.appendChild(controls);
+    box.appendChild(row);
+  }
+}
+
+// ---------- Cart ----------
+function addToCart(item, size) {
+  const line = cart.find(l => l.itemId === item.itemId && l.size === size);
+  if (line) { if (line.qty < 10) line.qty++; }
+  else cart.push({ itemId: item.itemId, name: item.name, size, qty: 1, unitCents: item.sizes[size] });
+  idempotencyKey = null; // cart changed → this is a new order
+  renderCart();
+}
+
+function removeFromCart(i) {
+  cart.splice(i, 1);
+  idempotencyKey = null;
+  renderCart();
+}
+
+function renderCart() {
+  const box = el("cart");
+  if (!cart.length) {
+    box.innerHTML = '<p class="muted">Nothing yet. Add something from the menu.</p>';
+    el("place-btn").disabled = true;
+    return;
+  }
+  box.innerHTML = "";
+  let total = 0;
+  cart.forEach((l, i) => {
+    total += l.unitCents * l.qty;
+    const row = document.createElement("div");
+    row.className = "row";
+    const left = document.createElement("span");
+    left.textContent = `${l.qty} × ${l.name}${l.size === "REG" ? "" : " (" + l.size.toLowerCase() + ")"}`;
+    const rm = document.createElement("button");
+    rm.className = "link";
+    rm.textContent = "remove";
+    rm.onclick = () => removeFromCart(i);
+    left.appendChild(rm);
+    const right = document.createElement("span");
+    right.textContent = money(l.unitCents * l.qty);
+    row.append(left, right);
+    box.appendChild(row);
+  });
+  const t = document.createElement("div");
+  t.className = "row total";
+  t.innerHTML = `<span>Total (estimate)</span><span>${money(total)}</span>`;
+  box.appendChild(t);
+  el("place-btn").disabled = false;
+}
+
+// ---------- Place order ----------
+async function placeOrder() {
+  const name = el("pickup-name").value.trim();
+  el("order-error").textContent = "";
+  if (!name) { el("order-error").textContent = "Please enter a name for pickup."; return; }
+
+  // Same key for retries of the SAME order → no double coffee.
+  if (!idempotencyKey) idempotencyKey = crypto.randomUUID();
+
+  el("place-btn").disabled = true;
+  el("place-btn").textContent = "Placing…";
+  try {
+    const res = await fetch(API + "/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({
+        pickupName: name,
+        items: cart.map(l => ({ itemId: l.itemId, size: l.size, qty: l.qty }))
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data.error && data.error.message) || "Could not place the order");
+    cart = [];
+    idempotencyKey = null;
+    renderCart();
+    showStatus(data.orderId);
+  } catch (e) {
+    el("order-error").textContent = e.message + " (you can safely try again)";
+  } finally {
+    el("place-btn").textContent = "Place order";
+    el("place-btn").disabled = !cart.length;
+  }
+}
+
+// ---------- Status ----------
+function showStatus(orderId) {
+  location.hash = orderId; // so a refresh keeps showing this order
+  el("status-section").classList.remove("hidden");
+  el("status-id").textContent = orderId;
+  el("status-section").scrollIntoView({ behavior: "smooth" });
+  clearInterval(pollTimer);
+  let polls = 0;
+  const check = async () => {
+    polls++;
+    try {
+      const res = await fetch(API + "/orders/" + encodeURIComponent(orderId));
+      if (!res.ok) throw new Error(res.status);
+      renderStatus(await res.json());
+      const done = FINAL.includes(el("status-badge").textContent);
+      if (done || polls > 60) clearInterval(pollTimer); // stop after ~3 min
+    } catch (e) {
+      el("status-text").textContent = "Could not load the order status.";
+    }
+  };
+  check();
+  pollTimer = setInterval(check, 3000);
+}
+
+function renderStatus(order) {
+  const badge = el("status-badge");
+  badge.textContent = order.status;
+  badge.className = "badge " + order.status;
+  let text = STATUS_TEXT[order.status] || "";
+  if (order.status === "REJECTED" && order.unavailableItems) {
+    const names = order.unavailableItems.map(id => (menu.find(m => m.itemId === id) || { name: id }).name);
+    text += " Out of stock: " + names.join(", ") + ".";
+  }
+  el("status-text").textContent = text;
+
+  const box = el("status-items");
+  box.innerHTML = "";
+  for (const l of order.items) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const a = document.createElement("span");
+    a.textContent = `${l.qty} × ${l.name}`;
+    const b = document.createElement("span");
+    b.textContent = money(l.lineCents);
+    row.append(a, b);
+    box.appendChild(row);
+  }
+  const t = document.createElement("div");
+  t.className = "row total";
+  t.innerHTML = `<span>Total</span><span>${money(order.totalCents)}</span>`;
+  box.appendChild(t);
+}
+
+el("place-btn").onclick = placeOrder;
+el("new-order-btn").onclick = () => {
+  clearInterval(pollTimer);
+  location.hash = "";
+  el("status-section").classList.add("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+};
+
+loadMenu();
+if (/^#ord_[0-9a-f]{12}$/.test(location.hash)) showStatus(location.hash.slice(1));
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "brewline-menu": [
+    {"PutRequest": {"Item": {"itemId": {"S": "espresso"}, "name": {"S": "Espresso"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"REG": {"N": "325"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "americano"}, "name": {"S": "Americano"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "350"}, "MEDIUM": {"N": "400"}, "LARGE": {"N": "450"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "latte"}, "name": {"S": "Latte"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "450"}, "MEDIUM": {"N": "500"}, "LARGE": {"N": "550"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "cappuccino"}, "name": {"S": "Cappuccino"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "450"}, "MEDIUM": {"N": "500"}, "LARGE": {"N": "550"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "flat-white"}, "name": {"S": "Flat White"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"REG": {"N": "475"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "mocha"}, "name": {"S": "Mocha"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "500"}, "MEDIUM": {"N": "550"}, "LARGE": {"N": "600"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "chai-latte"}, "name": {"S": "Chai Latte"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "450"}, "MEDIUM": {"N": "500"}, "LARGE": {"N": "550"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "matcha-latte"}, "name": {"S": "Matcha Latte"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "500"}, "MEDIUM": {"N": "550"}, "LARGE": {"N": "600"}}}, "stock": {"N": "100"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "croissant"}, "name": {"S": "Butter Croissant"}, "category": {"S": "FOOD"}, "sizes": {"M": {"REG": {"N": "350"}}}, "stock": {"N": "5"}, "lowStockAt": {"N": "2"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "banana-bread"}, "name": {"S": "Banana Bread"}, "category": {"S": "FOOD"}, "sizes": {"M": {"REG": {"N": "375"}}}, "stock": {"N": "20"}, "lowStockAt": {"N": "5"}, "active": {"BOOL": true}}}},
+    {"PutRequest": {"Item": {"itemId": {"S": "pumpkin-spice-latte"}, "name": {"S": "Pumpkin Spice Latte"}, "category": {"S": "COFFEE"}, "sizes": {"M": {"SMALL": {"N": "550"}, "MEDIUM": {"N": "600"}, "LARGE": {"N": "650"}}}, "stock": {"N": "50"}, "lowStockAt": {"N": "10"}, "active": {"BOOL": false}}}}
+  ]
+}
